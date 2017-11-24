@@ -162,10 +162,10 @@ var WKWebView = createReactClass({
      * Report the progress
      */
     onProgress: PropTypes.func,
-    /**
-     * Receive message from webpage
+     /**
+     * Will be called once the message is being sent from webview
      */
-    onMessage: PropTypes.func,
+    onBridgeMessage: PropTypes.func,
     /**
      * Receive scroll events from view
      */
@@ -271,7 +271,7 @@ var WKWebView = createReactClass({
     });
 
     if (this.props.source && typeof this.props.source == 'object') {
-      var source = Object.assign({}, this.props.source, { 
+      var source = Object.assign({}, this.props.source, {
         sendCookies: this.props.sendCookies,
         customUserAgent: this.props.customUserAgent || this.props.userAgent
       });
@@ -281,7 +281,17 @@ var WKWebView = createReactClass({
       source.html = this.props.html;
     } else if (this.props.url) {
       source.uri = this.props.url;
-    }
+  }
+
+    var onBridgeMessage = (event: Event) => {
+        const onBridgeMessageCallback = this.props.onBridgeMessage;
+        if (onBridgeMessageCallback) {
+            const messages = event.nativeEvent.messages;
+            messages.forEach((message) => {
+                onBridgeMessageCallback(message);
+            });
+        }
+    };
 
     var webView =
       <RCTWKWebView
@@ -301,11 +311,11 @@ var WKWebView = createReactClass({
         onLoadingFinish={this._onLoadingFinish}
         onLoadingError={this._onLoadingError}
         onProgress={this._onProgress}
-        onMessage={this._onMessage}
         onScroll={this._onScroll}
         onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
         pagingEnabled={this.props.pagingEnabled}
         directionalLockEnabled={this.props.directionalLockEnabled}
+        onBridgeMessage={onBridgeMessage}
       />;
 
     return (
@@ -363,6 +373,10 @@ var WKWebView = createReactClass({
     );
   },
 
+  sendToBridge: function (message: string) {
+    WKWebViewManager.sendToBridge(this.getWebViewHandle(), message);
+  },
+
   /**
    * Stop loading the current page.
    */
@@ -372,10 +386,6 @@ var WKWebView = createReactClass({
       UIManager.RCTWKWebView.Commands.stopLoading,
       null
     )
-  },
-
-  evaluateJavaScript: function(js) {
-    return WKWebViewManager.evaluateJavaScript(this.getWebViewHandle(), js);
   },
 
   /**

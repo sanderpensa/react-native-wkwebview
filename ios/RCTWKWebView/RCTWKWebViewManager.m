@@ -43,7 +43,7 @@ RCT_EXPORT_VIEW_PROPERTY(onLoadingFinish, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onLoadingError, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onShouldStartLoadWithRequest, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onProgress, RCTDirectEventBlock)
-RCT_EXPORT_VIEW_PROPERTY(onMessage, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onBridgeMessage, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onScroll, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(hideKeyboardAccessoryView, BOOL)
 
@@ -77,7 +77,7 @@ RCT_EXPORT_METHOD(canGoBack:(nonnull NSNumber *)reactTag
 {
   [self.bridge.uiManager addUIBlock:^(__unused RCTUIManager *uiManager, NSDictionary<NSNumber *, RCTWKWebView *> *viewRegistry) {
     RCTWKWebView *view = viewRegistry[reactTag];
-    
+
     resolve([NSNumber numberWithBool:[view canGoBack]]);
   }];
 }
@@ -88,7 +88,7 @@ RCT_EXPORT_METHOD(canGoForward:(nonnull NSNumber *)reactTag
 {
   [self.bridge.uiManager addUIBlock:^(__unused RCTUIManager *uiManager, NSDictionary<NSNumber *, RCTWKWebView *> *viewRegistry) {
     RCTWKWebView *view = viewRegistry[reactTag];
-    
+
     resolve([NSNumber numberWithBool:[view canGoForward]]);
   }];
 }
@@ -117,25 +117,18 @@ RCT_EXPORT_METHOD(stopLoading:(nonnull NSNumber *)reactTag)
   }];
 }
 
-RCT_EXPORT_METHOD(evaluateJavaScript:(nonnull NSNumber *)reactTag
-                  js:(NSString *)js
-                  resolver:(RCTPromiseResolveBlock)resolve
-                  rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(sendToBridge:(nonnull NSNumber *)reactTag
+                  value:(NSString*)message)
 {
-  [self.bridge.uiManager addUIBlock:^(__unused RCTUIManager *uiManager, NSDictionary<NSNumber *, RCTWKWebView *> *viewRegistry) {
-    RCTWKWebView *view = viewRegistry[reactTag];
-    if (![view isKindOfClass:[RCTWKWebView class]]) {
-      RCTLogError(@"Invalid view returned from registry, expecting RCTWKWebView, got: %@", view);
-    } else {
-      [view evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
-        if (error) {
-          reject(@"js_error", @"Error occurred while evaluating Javascript", error);
+    [self.bridge.uiManager addUIBlock:^(__unused RCTUIManager *uiManager, NSDictionary<NSNumber *, RCTWKWebView *> *viewRegistry) {
+
+        RCTWKWebView *view = viewRegistry[reactTag];
+        if (![view isKindOfClass:[RCTWKWebView class]]) {
+            RCTLogError(@"Invalid view returned from registry, expecting RCTWKWebView, got: %@", view);
         } else {
-          resolve(result);
+             [view sendToBridge: message];
         }
-      }];
-    }
-  }];
+    }];
 }
 
 #pragma mark - Exported synchronous methods

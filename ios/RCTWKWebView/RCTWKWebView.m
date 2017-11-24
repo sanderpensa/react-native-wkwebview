@@ -14,6 +14,11 @@
 
 #import <objc/runtime.h>
 
+//This is a very elegent way of defining multiline string in objective-c.
+//source: http://stackoverflow.com/a/23387659/828487
+#define NSStringMultiline(...) [[NSString alloc] initWithCString:#__VA_ARGS__ encoding:NSUTF8StringEncoding]
+
+
 // runtime trick to remove WKWebView keyboard default toolbar
 // see: http://stackoverflow.com/questions/19033292/ios-7-uiwebview-keyboard-issue/19042279#19042279
 @interface _SwizzleHelperWK : NSObject @end
@@ -32,7 +37,7 @@
 @property (nonatomic, copy) RCTDirectEventBlock onLoadingError;
 @property (nonatomic, copy) RCTDirectEventBlock onShouldStartLoadWithRequest;
 @property (nonatomic, copy) RCTDirectEventBlock onProgress;
-@property (nonatomic, copy) RCTDirectEventBlock onMessage;
+@property (nonatomic, copy) RCTDirectEventBlock onBridgeMessage;
 @property (nonatomic, copy) RCTDirectEventBlock onScroll;
 @property (assign) BOOL sendCookies;
 
@@ -86,7 +91,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
       request = mutableRequest;
     }
   }
-  
+
   [_webView loadRequest:request];
 }
 
@@ -119,14 +124,6 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
   }
 
   object_setClass(subview, newClass);
-}
-
-
-- (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message
-{
-  if (_onMessage) {
-    _onMessage(@{@"name":message.name, @"body": message.body});
-  }
 }
 
 - (void)goForward
@@ -171,6 +168,24 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
   [_webView stopLoading];
 }
 
+- (void)sendToBridge:(NSString *)message
+{
+    //we are warpping the send message in a function to make sure that if
+    //WebView is not injected, we don't crash the app.
+    NSString *format = NSStringMultiline(
+                                         (function(){
+        if (WebViewBridge && WebViewBridge.__push__) {
+            WebViewBridge.__push__('%@');
+        }
+    }());
+                                         );
+
+    NSString *command = [NSString stringWithFormat: format, message];
+    [_webView evaluateJavaScript:command completionHandler:^(id result, NSError *error) {
+
+    }];
+}
+
 - (void)setSource:(NSDictionary *)source
 {
   if (![_source isEqualToDictionary:source]) {
@@ -185,14 +200,14 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
     // Only works for iOS 9+. So iOS 8 will simply ignore those two values
     NSString *file = [RCTConvert NSString:source[@"file"]];
     NSString *allowingReadAccessToURL = [RCTConvert NSString:source[@"allowingReadAccessToURL"]];
-    
+
     if (file && [_webView respondsToSelector:@selector(loadFileURL:allowingReadAccessToURL:)]) {
       NSURL *fileURL = [RCTConvert NSURL:file];
       NSURL *baseURL = [RCTConvert NSURL:allowingReadAccessToURL];
       [_webView loadFileURL:fileURL allowingReadAccessToURL:baseURL];
       return;
     }
-    
+
     // Check for a static html source first
     NSString *html = [RCTConvert NSString:source[@"html"]];
     if (html) {
@@ -203,7 +218,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
       [_webView loadHTMLString:html baseURL:baseURL];
       return;
     }
-    
+
     NSURLRequest *request = [RCTConvert NSURLRequest:source];
     // Because of the way React works, as pages redirect, we actually end up
     // passing the redirect urls back here, so we ignore them if trying to load
@@ -256,7 +271,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
                                                                                                  @"canGoBack": @(_webView.canGoBack),
                                                                                                  @"canGoForward" : @(_webView.canGoForward),
                                                                                                  }];
-  
+
   return event;
 }
 
@@ -322,9 +337,34 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
   NSURLRequest *request = navigationAction.request;
   NSURL* url = request.URL;
   NSString* scheme = url.scheme;
-  
+
   BOOL isJSNavigation = [scheme isEqualToString:RCTJSNavigationScheme];
-  
+
+   if (!isJSNavigation && [request.URL.scheme isEqualToString:@"wvb"]) {
+
+       [webView evaluateJavaScript:@"WebViewBridge.__fetch__()" completionHandler:^(id message, NSError *error) {
+            NSMutableDictionary<NSString *, id> *onBridgeMessageEvent = [[NSMutableDictionary alloc] initWithDictionary:@{@"messages": [self stringArrayJsonToArray: message]}];
+
+            _onBridgeMessage(onBridgeMessageEvent);
+            if (_onLoadingStart) {
+                // We have this check to filter out iframe requests and whatnot
+                BOOL isTopFrame = [url isEqual:request.mainDocumentURL];
+                if (isTopFrame) {
+                    NSMutableDictionary<NSString *, id> *event = [self baseEvent];
+                    [event addEntriesFromDictionary: @{
+                                                       @"url": url.absoluteString,
+                                                       @"navigationType": @(navigationAction.navigationType)
+                                                       }];
+                    _onLoadingStart(event);
+                }
+            }
+
+            decisionHandler(WKNavigationActionPolicyCancel);
+
+        }];
+        return;
+    }
+
   // skip this for the JS Navigation handler
   if (!isJSNavigation && _onShouldStartLoadWithRequest) {
     NSMutableDictionary<NSString *, id> *event = [self baseEvent];
@@ -338,7 +378,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
       return decisionHandler(WKNavigationActionPolicyCancel);
     }
   }
-  
+
   if (_onLoadingStart) {
     // We have this check to filter out iframe requests and whatnot
     BOOL isTopFrame = [url isEqual:request.mainDocumentURL];
@@ -351,7 +391,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
       _onLoadingStart(event);
     }
   }
-  
+
   if (isJSNavigation) {
     decisionHandler(WKNavigationActionPolicyCancel);
   }
@@ -370,7 +410,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
       // http://stackoverflow.com/questions/1024748/how-do-i-fix-nsurlerrordomain-error-999-in-iphone-3-0-os
       return;
     }
-    
+
     NSMutableDictionary<NSString *, id> *event = [self baseEvent];
     [event addEntriesFromDictionary:@{
                                       @"domain": error.domain,
@@ -383,24 +423,121 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(__unused WKNavigation *)navigation
 {
-  if (_injectedJavaScript != nil) {
-    [webView evaluateJavaScript:_injectedJavaScript completionHandler:^(id result, NSError *error) {
-      NSMutableDictionary<NSString *, id> *event = [self baseEvent];
-      event[@"jsEvaluationValue"] = [NSString stringWithFormat:@"%@", result];
-      _onLoadingFinish(event);
+  //injecting WebViewBridge Script
+    NSString *webViewBridgeScriptContent = [self webViewBridgeScript];
+    [webView evaluateJavaScript:webViewBridgeScriptContent completionHandler:^(id result, NSError *error) {
+        if (_injectedJavaScript != nil) {
+            [webView evaluateJavaScript:_injectedJavaScript completionHandler:^(id result, NSError *error) {
+                NSMutableDictionary<NSString *, id> *event = [self baseEvent];
+                event[@"jsEvaluationValue"] = [NSString stringWithFormat:@"%@", result];
+                _onLoadingFinish(event);
+            }];
+        }
+        // we only need the final 'finishLoad' call so only fire the event when we're actually done loading.
+        else if (_onLoadingFinish && !webView.loading && ![webView.URL.absoluteString isEqualToString:@"about:blank"]) {
+            _onLoadingFinish([self baseEvent]);
+        }
     }];
-  }
-  // we only need the final 'finishLoad' call so only fire the event when we're actually done loading.
-  else if (_onLoadingFinish && !webView.loading && ![webView.URL.absoluteString isEqualToString:@"about:blank"]) {
-    _onLoadingFinish([self baseEvent]);
-  }
+}
+
+- (NSArray*)stringArrayJsonToArray:(NSString *)message
+{
+    return [NSJSONSerialization JSONObjectWithData:[message dataUsingEncoding:NSUTF8StringEncoding]
+                                           options:NSJSONReadingAllowFragments
+                                             error:nil];
+}
+
+//since there is no easy way to load the static lib resource in ios,
+//we are loading the script from this method.
+- (NSString *)webViewBridgeScript {
+  // NSBundle *bundle = [NSBundle mainBundle];
+  // NSString *webViewBridgeScriptFile = [bundle pathForResource:@"webviewbridge"
+  //                                                      ofType:@"js"];
+  // NSString *webViewBridgeScriptContent = [NSString stringWithContentsOfFile:webViewBridgeScriptFile
+  //                                                                  encoding:NSUTF8StringEncoding
+  //                                                                     error:nil];
+
+  return NSStringMultiline(
+    (function (window) {
+      'use strict';
+
+      //Make sure that if WebViewBridge already in scope we don't override it.
+      if (window.WebViewBridge) {
+        return;
+      }
+
+      var RNWBSchema = 'wvb';
+      var sendQueue = [];
+      var receiveQueue = [];
+      var doc = window.document;
+      var customEvent = doc.createEvent('Event');
+
+      function callFunc(func, message) {
+        if ('function' === typeof func) {
+          func(message);
+        }
+      }
+
+      function signalNative() {
+        window.location = RNWBSchema + '://message' + new Date().getTime();
+      }
+
+      //I made the private function ugly signiture so user doesn't called them accidently.
+      //if you do, then I have nothing to say. :(
+      var WebViewBridge = {
+        //this function will be called by native side to push a new message
+        //to webview.
+        __push__: function (message) {
+          receiveQueue.push(message);
+          //reason I need this setTmeout is to return this function as fast as
+          //possible to release the native side thread.
+          setTimeout(function () {
+            var message = receiveQueue.pop();
+            callFunc(WebViewBridge.onMessage, message);
+          }, 15); //this magic number is just a random small value. I don't like 0.
+        },
+        __fetch__: function () {
+          //since our sendQueue array only contains string, and our connection to native
+          //can only accept string, we need to convert array of strings into single string.
+          var messages = JSON.stringify(sendQueue);
+
+          //we make sure that sendQueue is resets
+          sendQueue = [];
+
+          //return the messages back to native side.
+          return messages;
+        },
+        //make sure message is string. because only string can be sent to native,
+        //if you don't pass it as string, onError function will be called.
+        send: function (message) {
+          if ('string' !== typeof message) {
+            callFunc(WebViewBridge.onError, "message is type '" + typeof message + "', and it needs to be string");
+            return;
+          }
+
+          //we queue the messages to make sure that native can collects all of them in one shot.
+          sendQueue.push(message);
+          //signal the objective-c that there is a message in the queue
+          signalNative();
+        },
+        onMessage: null,
+        onError: null
+      };
+
+      window.WebViewBridge = WebViewBridge;
+
+      //dispatch event
+      customEvent.initEvent('WebViewBridge', true, true);
+      doc.dispatchEvent(customEvent);
+    }(window));
+  );
 }
 
 #pragma mark - WKUIDelegate
 
 - (void)webView:(WKWebView *)webView runJavaScriptAlertPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(void))completionHandler {
   UIAlertController *alertController = [UIAlertController alertControllerWithTitle:message message:nil preferredStyle:UIAlertControllerStyleAlert];
-  
+
   [alertController addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Close", nil) style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
     completionHandler();
   }]];
@@ -409,7 +546,7 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
 }
 
 - (void)webView:(WKWebView *)webView runJavaScriptConfirmPanelWithMessage:(NSString *)message initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(BOOL))completionHandler {
-  
+
   // TODO We have to think message to confirm "YES"
   UIAlertController *alertController = [UIAlertController alertControllerWithTitle:message message:nil preferredStyle:UIAlertControllerStyleAlert];
   [alertController addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", nil) style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
@@ -423,17 +560,17 @@ RCT_NOT_IMPLEMENTED(- (instancetype)initWithCoder:(NSCoder *)aDecoder)
 }
 
 - (void)webView:(WKWebView *)webView runJavaScriptTextInputPanelWithPrompt:(NSString *)prompt defaultText:(NSString *)defaultText initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(NSString *))completionHandler {
-  
+
   UIAlertController *alertController = [UIAlertController alertControllerWithTitle:prompt message:nil preferredStyle:UIAlertControllerStyleAlert];
   [alertController addTextFieldWithConfigurationHandler:^(UITextField *textField) {
     textField.text = defaultText;
   }];
-  
+
   [alertController addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"OK", nil) style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
     NSString *input = ((UITextField *)alertController.textFields.firstObject).text;
     completionHandler(input);
   }]];
-  
+
   [alertController addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", nil) style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
     completionHandler(nil);
   }]];

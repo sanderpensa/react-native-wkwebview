@@ -40,6 +40,6 @@ shouldStartLoadForRequest:(NSMutableDictionary<NSString *, id> *)request
 - (BOOL)canGoForward;
 - (void)reload;
 - (void)stopLoading;
-- (void)evaluateJavaScript:(NSString *)javaScriptString completionHandler:(void (^)(id, NSError *error))completionHandler;
+- (void)sendToBridge:(NSString *)message;
 
 @end
